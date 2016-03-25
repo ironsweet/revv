@@ -24,13 +24,12 @@ func main() {
 	}
 	defer watcher.Close()
 
-	//cmd := exec.Command(os.Args[1], os.Args[1:]...)
-	//cmd.Stdout = os.Stdout
-	//cmd.Stderr = os.Stderr
-	//err := cmd.Start()
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
+	cmd := exec.Command(os.Args[1], os.Args[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err = cmd.Start(); err != nil {
+		log.Fatal(err)
+	}
 
 	done := make(chan bool)
 	go func() {
@@ -38,32 +37,43 @@ func main() {
 		for {
 			select {
 			case event := <-watcher.Events:
-				log.Println("event:", event)
-				if event.Op&fsnotify.Write == fsnotify.Write {
+				if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
+					log.Println("Detected change.")
 					if timer == nil {
 						timer = time.NewTimer(3 * time.Second)
 						go func() {
 							<-timer.C
-							fmt.Println("restart")
+							log.Println("Reloading...")
+							if err = cmd.Process.Kill(); err != nil {
+								log.Fatal("Kill:", err)
+							} else {
+								cmd.Wait() // wait until program ends
+								cmd = exec.Command(os.Args[1], os.Args[1:]...)
+								cmd.Stdout = os.Stdout
+								cmd.Stderr = os.Stderr
+								if err = cmd.Start(); err != nil {
+									log.Fatal("Start", err)
+								}
+								log.Println("Reloaded.")
+							}
+							timer = nil
 						}()
 					} else {
 						timer.Reset(5 * time.Second)
 					}
 				}
 			case err := <-watcher.Errors:
-				log.Println("error:", err)
+				log.Println("Error:", err)
 			}
 		}
 	}()
 
-	p, err := exec.LookPath(os.Args[1])
-	if err != nil {
+	var p string
+	if p, err = exec.LookPath(os.Args[1]); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("Monitoring: %v", p)
-
-	err = watcher.Add(p)
-	if err != nil {
+	log.Println("Monitoring:", p)
+	if err = watcher.Add(p); err != nil {
 		log.Fatal(err)
 	}
 	<-done
